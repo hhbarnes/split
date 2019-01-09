@@ -38,7 +38,6 @@ const optionDefinitions = [
 		name: 'lines',
 		alias: 'l',
 		type: Number,
-		default: 6000,
 		description: 'Maxium number of lines in output files, default is 6000',
 	}
 ];
@@ -67,6 +66,11 @@ const valid = options.help || (
     && options.src.length
 	&& options.src.every(fs.existsSync)
 );
+
+// Default lines to 6000
+if(!options.hasOwnProperty('lines')){
+	options.lines = 6000;
+}
 
 if (valid && !options.help) {
 	// Process each input file one at a time
