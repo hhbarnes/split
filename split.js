@@ -4,6 +4,7 @@ const fs = require('fs');
 const util = require('util');
 const async = require('async');
 const commandLineArgs = require('command-line-args');
+const commandLineUsage = require('command-line-usage');
 const splitByLine = require('split-file-by-line');
 const concat = require('concat');
 const TextFileDiff = require('text-file-diff');
@@ -13,10 +14,18 @@ const compare = new TextFileDiff();
 
 const optionDefinitions = [
 	{
+		name: 'help',
+		alias: 'h',
+		type: Boolean,
+		default: false,
+		description: 'Display this usage guide',
+	},
+	{
 		name: 'verbose',
 		alias: 'v',
 		type: Boolean,
-		description: 'Display details as the the command runs.',
+		default: false,
+		description: 'Display errors as the files are audited',
 	},
 	{
 		name: 'src',
@@ -30,16 +39,27 @@ const optionDefinitions = [
 		alias: 'l',
 		type: Number,
 		default: 6000,
-		description: 'Maxium number of lines in output files, default is 6000.',
-	},
-	{
-		name: 'help',
-		alias: 'h',
-		description: 'Display this usage guide.',
-	},
+		description: 'Maxium number of lines in output files, default is 6000',
+	}
 ];
 
+const sections = [
+	{
+	  header: 'Split',
+	  content: 'Command Utility to split a text file into smaller files based on line count, then audits the split files.'
+	},
+	{
+	  header: 'Options',
+	  optionList: optionDefinitions
+	}
+  ]
+
 const options = commandLineArgs(optionDefinitions);
+
+if (options.help){
+	console.log(commandLineUsage(sections));
+	return;
+}
 
 const valid = options.help || (
 	/* all supplied files should exist and --log-level should be one from the list */
@@ -48,7 +68,7 @@ const valid = options.help || (
 	&& options.src.every(fs.existsSync)
 );
 
-if (valid) {
+if (valid && !options.help) {
 	// Process each input file one at a time
 	async.each(options.src, (inputFile, next) => {
 		// Split files
