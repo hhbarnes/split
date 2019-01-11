@@ -1,31 +1,29 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const util = require('util');
-const async = require('async');
 const commandLineArgs = require('command-line-args');
 const commandLineUsage = require('command-line-usage');
-const splitByLine = require('split-file-by-line');
-const concat = require('concat');
-const TextFileDiff = require('text-file-diff');
 const glob = require('glob');
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+const splitByLine = require('split-file-by-line');
+const async = require('async');
 
-const compare = new TextFileDiff();
-
+// ************************************************************
+// ************** Process Command Line Arguments **************
+// ************************************************************
 const optionDefinitions = [
 	{
 		name: 'help',
 		alias: 'h',
 		type: Boolean,
-		default: false,
 		description: 'Display this usage guide',
 	},
 	{
 		name: 'verbose',
 		alias: 'v',
 		type: Boolean,
-		default: false,
-		description: 'Display errors as the files are audited',
+		description: 'Display detailed messages as the utility runs',
 	},
 	{
 		name: 'src',
@@ -39,135 +37,136 @@ const optionDefinitions = [
 		alias: 'l',
 		type: Number,
 		description: 'Maxium number of lines in output files, default is 6000',
-	}
+	},
 ];
 
-const sections = [
+const helpSections = [
 	{
-	  header: 'Split',
-	  content: 'Command Utility to split a text file into smaller files based on line count, then audits the split files.'
+		header: 'Split',
+		content: 'Command Utility to split a text file into smaller files based on line count, then audits the split files.',
 	},
 	{
-	  header: 'Options',
-	  optionList: optionDefinitions
-	}
-  ]
+		header: 'Options',
+		optionList: optionDefinitions,
+	},
+];
 
+// Retrieve Args
 const options = commandLineArgs(optionDefinitions);
 
-if (options.help){
-	console.log(commandLineUsage(sections));
-	return;
+// Set Defaults for missing Args
+if (!Object.prototype.hasOwnProperty.call(options, 'lines')) options.lines = 6000;
+if (!Object.prototype.hasOwnProperty.call(options, 'verbose')) options.verbose = false;
+if (!Object.prototype.hasOwnProperty.call(options, 'help')) options.help = false;
+
+// Display Help if selected and exit
+if (options.help) {
+	console.log(commandLineUsage(helpSections));
+	process.exit(0);
 }
 
-const valid = options.help || (
-	/* all supplied files should exist and --log-level should be one from the list */
-	options.src
-    && options.src.length
-	&& options.src.every(fs.existsSync)
-);
-
-// Default lines to 6000
-if(!options.hasOwnProperty('lines')){
-	options.lines = 6000;
+// Validate src was passed if not display error and exit
+if (!(options.src && options.src.length)) {
+	console.log('Source file(s) not specified or invaild.');
+	process.exit(0);
 }
 
-if (valid && !options.help) {
-	// Process each input file one at a time
-	async.each(options.src, (inputFile, next) => {
-		// Split files
-		const inputFileComp = inputFile.split('.', 2);
-		const outputfile = `${inputFileComp[0]}-split-`;
+// ************************************************************
+// *************** Build list of files to split ***************
+// ************************************************************
+let files2Split = [];
 
-		// Check directory to see if files exist
-		glob(`${inputFileComp[0]}-*`, (err, files) => {
-			if (files.length > 0) {
-				console.log(`Unable to process ${inputFile}. Please remove old files: ${files.join(', ')}`);
-				return;
+// Retrieve list of files if directory and validate they exist.
+options.src.forEach((src) => {
+	// Retrieve Files from entry
+	const globResults = glob.sync(src, { nonull: false, mark: true, nodir: false });
+
+	// Process each element
+	globResults.forEach((element) => {
+		// Check to see if it is a directory, if so query the directory for files. If
+		// not add the file to the list. Skip any previous run's output
+		if (element.search('-split') === -1) {
+			if (element[element.length - 1] === '/') {
+				files2Split = files2Split.concat(glob.sync(`${element}*`, { nonull: false, mark: true, nodir: true }));
+			} else {
+				files2Split.push(element);
 			}
-
-			console.log(`Starting to split ${inputFile} into files with a maximum of ${options.lines} lines each.`);
-			splitByLine.split(inputFile, outputfile, options.lines, (fileArray) => {
-				// bug workaround last file added twice to array
-				if (fileArray.length > 1) fileArray.pop();
-				console.log(`${inputFile} split into ${fileArray.length} files`);
-
-				// Combining output files into single file for validation
-				const checkFileName = `${inputFileComp[0]}-verification`;
-				concat(fileArray).then((results) => {
-					console.log(`Creating ${checkFileName} verification file`);
-
-					// remove blank lines from validation file
-					let cleanResults = results;
-					if (cleanResults.search(/(\r\n\r\n)/gm) > -1) cleanResults = cleanResults.replace(/(\r\n\r\n)/gm, '\r\n');
-					if (cleanResults.search(/(\n\n)/gm) > -1) cleanResults = cleanResults.replace(/(\n\n)/gm, '\n');
-					if (cleanResults.search(/(\r\r)/gm) > -1) cleanResults = cleanResults.replace(/(\r\r)/gm, '\r');
-
-					const fd = fs.openSync(checkFileName, 'w');
-					const buf = Buffer.from(cleanResults);
-					fs.writeSync(fd, buf);
-					fs.closeSync(fd);
-					console.log('Verification file created');
-
-					// Setup validation and compare, saving log
-					let errorCount = 0;
-					let msg = '';
-
-					const checkFileLogName = `${inputFileComp[0]}-verification-log`;
-					console.log(`Creating ${checkFileLogName} file`);
-					const checkFileLog = fs.createWriteStream(checkFileLogName, { flags: 'w' });
-
-					// Setup Compare Tool
-					compare.on('compared', (line1, line2, compareResult) => {												
-						if ((compareResult !== 0) && (!line1) && (!line2)) {
-							errorCount += 1;
-							msg = util.format(`***MISMATCH***: ${line1} || ${line2},\n`);
-						} else {
-							msg = util.format(`MATCH: ${line1} || ${line2},\n`);
-						}
-
-						// Write Message
-						checkFileLog.write(msg);
-						if (options.verbose) console.log(msg);
-					});
-
-					compare.on('-', (line) => {
-						errorCount += 1;
-						msg = util.format(`***MISSING***: File ${checkFileName}, text ${line}\n`);
-
-						// Write Message
-						checkFileLog.write(msg);
-						if (options.verbose) console.log(msg);
-					});
-
-					compare.on('+', (line) => {
-						errorCount += 1;
-						msg = util.format(`***MISSING***: File ${inputFile}, text ${line}\n`);
-
-						// Write Message
-						checkFileLog.write(msg);
-						if (options.verbose) console.log(msg);
-					});
-
-					// run the diff
-					compare.diff(inputFile, checkFileName);
-
-					if (errorCount > 0) {
-						console.log(`Validation complete, errors found, refer to ${checkFileLogName} for details.`);
-					} else {
-						console.log(`Validation complete, no errors found, refer to ${checkFileLogName} for details.  Output files are: ${fileArray.join(', ')}`);
-					}
-				});
-			});
-
-			next();
-		});
-	}, (err) => {
-		if (err) {
-			console.log('A file failed to process');
-			console.log(err);
 		}
 	});
-} else {
-	console.log('Input file(s) not specified.');
-}
+});
+
+console.log(`Spliting the following files: ${files2Split.join(', ')}`);
+
+
+// ************************************************************
+// *********************** Split Files ************************
+// ************************************************************
+
+// Store current directory
+const cwd = path.resolve(process.cwd());
+
+// Process Each file
+files2Split.forEach((sourceFile) => {
+	process.chdir(cwd);
+
+	// ***** Create Directory for output files
+	let workingDirectory = `${sourceFile}-split`;
+	let i = 0;
+
+	// Find a directory that doesn't exist
+	while (fs.existsSync(workingDirectory)) {
+		i += 1;
+		workingDirectory = `${sourceFile}-split-${i}`;
+	}
+	// Create Working Directory
+	fs.mkdirSync(workingDirectory);
+
+	// ***** Copy File to working directory
+	const workingFile = `${workingDirectory}/original`;
+	fs.copyFileSync(sourceFile, workingFile);
+	process.chdir(workingDirectory);
+
+	// ***** Split the file
+	console.log(`Starting to split ${sourceFile} into files with a maximum of ${options.lines} lines each.`);
+	let splitFileArray = [];
+
+	splitByLine.split('original', 'file-', options.lines, (fileArray) => {
+		console.log(`${sourceFile} split into ${fileArray.length} files. Results are in the ${workingDirectory} directory`);
+		splitFileArray = fileArray;
+	});
+
+	// ***** Create Audit File
+	// Load original file
+	const originalArray = [];
+	const origInterface = readline.createInterface({
+		input: fs.createReadStream('original'),
+	});
+
+	origInterface.on('line', (line) => {
+		originalArray.push(line);
+	});
+
+	origInterface.on('close', () => {
+		// Do Comparison with subfiles
+		let orgRow = 0;
+
+		async.each(splitFileArray, (splitFile, next) => {
+			let splitRow = 0;
+
+			console.log(splitFile);
+			const splitInterface = readline.createInterface({
+				input: fs.createReadStream(splitFile),
+			});
+
+			splitInterface.on('line', (line) => {
+				// console.log(`${sourceFile} ${orgRow + 1}: ${originalArray[orgRow]} = ${splitFile} ${splitRow}: ${line}`);
+				splitRow += 1;
+				orgRow += 1;
+			});
+
+			splitInterface.on('close', () => {
+				next();
+			});
+		});
+	});
+});
